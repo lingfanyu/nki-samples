@@ -17,10 +17,9 @@ Flash Paged Attention kernels with variable-length sequence inputs.
 import neuronxcc.nki.isa as nisa
 import neuronxcc.nki.language as nl
 from neuronxcc.nki.language import par_dim
-from neuronxcc.nki.isa.constants import oob_mode
 
-from .constants import B_P_SIZE
-from .utils import (
+from constants import B_P_SIZE
+from utils import (
     ceil_div,
     is_power_of_2,
     transform_to_vector_dge_layout,

@@ -21,20 +21,20 @@ import neuronxcc.nki.language as nl
 from neuronxcc.nki.language import par_dim
 from neuronxcc.nki.isa.constants import oob_mode
 
-from .constants import B_P_SIZE, B_FMAX_SIZE
-from .utils import (
+from constants import B_P_SIZE, B_FMAX_SIZE
+from utils import (
     is_power_of_2,
     PF_transpose_with_PE,
 )
-from .paged_cache import prepare_kv_block_dim_tiling
-from .flash_pa_with_schedule import (
+from paged_cache import prepare_kv_block_dim_tiling
+from flash_attn_helper import (
     prepare_q_update_pred,
     allocate_prefill_accum_buffers,
     allocate_decode_accum_buffers,
     decode_gather_token_last_accum_tile,
     prefill_context_tokens,
     decode_context_tokens,
-    prefill_active_and_epilogue as active_and_epilogue,
+    active_and_epilogue,
 )
 
 

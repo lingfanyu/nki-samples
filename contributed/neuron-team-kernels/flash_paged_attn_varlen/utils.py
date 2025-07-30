@@ -21,7 +21,7 @@ import neuronxcc.nki.language as nl
 import neuronxcc.nki.isa as nisa
 from neuronxcc.nki.language import par_dim
 
-from .constants import B_P_SIZE
+from constants import B_P_SIZE
 
 
 def ceil_div(a, b):

@@ -1,6 +1,3 @@
-NKI FlashAttention with BlockSparse Execution Plan
-======================================
-
 NKI FlashPagedAttention on Variable-length Inputs
 ======================================
 
@@ -42,20 +39,18 @@ output_nki = nki_kernel_runner(
 )
 ```
 
-Check out `tests/test_pa_kernel.py` and `tests/nki_attention_runner.py` for example.
+Check out `kernel_runner.py` for example.
 
 
 ## Unit Test
 Run full kernel test. We support two modes: torch_xla and nki baremetal.
 ```bash
 mode=xla  # or baremetal
-TEST_EXEC_MODE=$mode PYTHONPATH=. pytest test_kernel.py -xv
+TEST_EXEC_MODE=$mode pytest test_kernel.py -xv
 ```
-
-Note: simulation mode may fail.
 
 We also support parallel testing using multiple Neuron Cores with `pytest-xdist`.
 ```bash
 nworker=8
-TEST_EXEC_MODE=$mode PYTHONPATH=. pytest test_kernel.py -xv -n$nworker
+TEST_EXEC_MODE=$mode pytest test_kernel.py -xv -n$nworker
 ```

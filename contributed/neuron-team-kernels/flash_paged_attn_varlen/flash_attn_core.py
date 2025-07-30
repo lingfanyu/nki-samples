@@ -21,8 +21,8 @@ import neuronxcc.nki.language as nl
 from neuronxcc import nki
 from neuronxcc.nki.language import par_dim
 
-from .constants import B_P_SIZE, B_FMAX_SIZE, NEG_INF
-from .utils import broadcast_partition_with_PE, PF_transpose_with_PE
+from constants import B_P_SIZE, B_FMAX_SIZE, NEG_INF
+from utils import broadcast_partition_with_PE, PF_transpose_with_PE
 
 
 @nki.jit

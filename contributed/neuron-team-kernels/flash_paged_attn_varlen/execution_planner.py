@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-from .constants import B_P_SIZE
+from constants import B_P_SIZE
 
 
 def _ceil_div(a, b):
@@ -213,9 +213,9 @@ def _check_np_int_array(*arrays):
     return True
 
 
-class FlashAttentionPlanner:
+class VarlenAttentionPlanner:
     """
-    Generate execution plan for flash attention
+    Generate execution plan for flash attention on variable-length sequences
     """
 
     def __init__(
@@ -225,7 +225,7 @@ class FlashAttentionPlanner:
         tile_size_q,
         tile_size_kv,
         block_size,
-        traverse_in_column_order,
+        traverse_in_column_order=False,
         enable_kv_dma_skipping=None,
     ):
         assert (

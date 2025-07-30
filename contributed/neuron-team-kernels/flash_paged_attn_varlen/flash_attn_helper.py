@@ -21,18 +21,18 @@ from neuronxcc.nki.language import par_dim
 from neuronxcc.nki.isa.constants import oob_mode
 from neuronxcc.nki.typing import scalar
 
-from .constants import NEG_INF, B_P_SIZE, B_FMAX_SIZE
-from .paged_cache import (
+from constants import NEG_INF, B_P_SIZE, B_FMAX_SIZE
+from paged_cache import (
     transform_block_tables_for_indirect_load,
     load_k_tile_from_cache,
     load_v_tile_from_cache,
     transpose_k_cache_tile,
 )
-from .flash_attn_core import (
+from flash_attn_core import (
     _flash_attention_core,
     _flash_attention_core_kq_matmul,
 )
-from .utils import (
+from utils import (
     ceil_div,
     pad_to_multiple,
     is_power_of_2,

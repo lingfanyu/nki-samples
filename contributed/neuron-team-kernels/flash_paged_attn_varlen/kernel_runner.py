@@ -26,7 +26,7 @@ from ml_dtypes import bfloat16
 from constants import B_P_SIZE, B_FMAX_SIZE
 from varlen_attention_kernel import flash_attn_varlen_nkifunc
 from execution_planner import (
-    FlashAttentionPlanner,
+    VarlenAttentionPlanner,
     TilePlan as ContextAttnPlan,
 )
 from test_utils import (
@@ -36,7 +36,6 @@ from test_utils import (
     is_power_of_2,
     pad_to_multiple,
     pad_to_next_power_of_2,
-    save_kernel_tensors_as_npy,
     convert_torch_tensor_to_numpy,
 )
 
@@ -84,41 +83,35 @@ class NKIFlashPagedAttentionRunner:
         block_size,
         *,
         dynamic_loop_unrolling_size=8,
-        enable_separate_prefill_decode=True,
-        skip_duplicate_kv_load=False,
         skip_active=False,
         exec_mode=None,
-        save_artifact=False,
     ):
         """
         Kernel executor to generate and cache tile-plan, and dispatch for execution
         """
         assert large_kv_tile_size >= B_P_SIZE
-        assert not skip_duplicate_kv_load
         self.query_lens = query_lens
         self.context_lens = context_lens
         self.large_q_tile_size = large_q_tile_size
         self.large_kv_tile_size = large_kv_tile_size
         self.block_size = block_size
-        self.skip_duplicate_kv_load = skip_duplicate_kv_load
         self.dynamic_loop_unrolling_size = dynamic_loop_unrolling_size
         self.exec_mode = _decide_execution_mode(exec_mode)
         self.skip_active = skip_active
         self.numpy_kernel_use_bf16 = True  # use ml_dtypes.bfloat16 for baremetal mode
-        self.save_artifact = save_artifact
         self.num_actual_tokens = None
         self.prefill_ctx_inputs: Optional[ContextAttnInputs] = None
         self.decode_ctx_inputs: Optional[ContextAttnInputs] = None
         assert self.batch_size <= B_P_SIZE
         assert is_power_of_2(self.large_q_tile_size)
         assert is_power_of_2(self.large_kv_tile_size)
-        self._preprocess(enable_separate_prefill_decode)
+        self._preprocess()
 
     @property
     def batch_size(self):
         return len(self.query_lens)
 
-    def _get_prefill_decode_batch_size(self, enable_separate_prefill_decode):
+    def _get_prefill_decode_batch_size(self):
         decode_batch_size = 0
         assert torch.all(self.query_lens > 0), f"Expect nonzero {self.query_lens}"
         for x in reversed(self.query_lens):
@@ -128,14 +121,10 @@ class NKIFlashPagedAttentionRunner:
         batch_size = self.batch_size
         assert decode_batch_size <= batch_size
         prefill_batch_size = batch_size - decode_batch_size
-        if (
-            not enable_separate_prefill_decode
-            and prefill_batch_size > 0
-            and decode_batch_size > 0
-        ):
-            # run decode as prefill
-            prefill_batch_size = batch_size
-            decode_batch_size = 0
+        assert prefill_batch_size > 0 and decode_batch_size > 0, (
+            "On-chip while loop cannot scale to zero. "
+            "Must have both prefill and decode requests"
+        )
         return prefill_batch_size, decode_batch_size
 
     def _decide_padded_query_len(self):
@@ -158,12 +147,10 @@ class NKIFlashPagedAttentionRunner:
             self.large_q_tile_size,
         )
 
-    def _preprocess(self, enable_separate_prefill_decode: bool):
+    def _preprocess(self):
         self.num_actual_tokens = self.query_lens.sum().item()
         self._decide_padded_query_len()
-        prefill_batch_size, decode_batch_size = self._get_prefill_decode_batch_size(
-            enable_separate_prefill_decode
-        )
+        prefill_batch_size, decode_batch_size = self._get_prefill_decode_batch_size()
         self._build_kernel_plan(prefill_batch_size, decode_batch_size)
 
         self.prefill_batch_size = prefill_batch_size
@@ -232,57 +219,26 @@ class NKIFlashPagedAttentionRunner:
             print(f"{plan.num_tiles=}")
             return plan
 
-        if prefill_batch_size > 0 and decode_batch_size > 0:
-            prefill_planner = FlashAttentionPlanner(
-                self.query_lens[:prefill_batch_size].int().numpy(),
-                self.context_lens[:prefill_batch_size].int().numpy(),
-                tile_size_q=self.large_q_tile_size,
-                tile_size_kv=self.large_kv_tile_size,
-                block_size=self.block_size,
-                traverse_in_column_order=self.skip_duplicate_kv_load,
-            )
-            self.prefill_plan = pad_plan_for_loop_unroll(
-                prefill_planner.generate_plan(),
-                q_pad_value=self.num_active_tokens_after_padding * 10,
-            )
-            decode_planner = FlashAttentionPlanner(
-                self.query_lens[prefill_batch_size:].int().numpy(),
-                self.context_lens[prefill_batch_size:].int().numpy(),
-                tile_size_q=1,
-                tile_size_kv=self.large_kv_tile_size,
-                block_size=self.block_size,
-                traverse_in_column_order=False,
-            )
-            self.decode_plan = pad_plan_for_loop_unroll(decode_planner.generate_plan())
-        else:
-            if decode_batch_size > 0:
-                assert (
-                    self.large_q_tile_size == 1
-                ), f"{self.large_q_tile_size=} must be 1 for decode"
-                assert (
-                    not self.skip_duplicate_kv_load
-                ), f"Decode kernel does not expect duplicate KV load"
-                q_pad_value = 0
-            else:
-                q_pad_value = self.num_active_tokens_after_padding * 10
-            planner = FlashAttentionPlanner(
-                self.query_lens.int().numpy(),
-                self.context_lens.int().numpy(),
-                tile_size_q=self.large_q_tile_size,
-                tile_size_kv=self.large_kv_tile_size,
-                block_size=self.block_size,
-                traverse_in_column_order=self.skip_duplicate_kv_load,
-            )
-            plan = pad_plan_for_loop_unroll(
-                planner.generate_plan(),
-                q_pad_value=q_pad_value,
-            )
-            if prefill_batch_size > 0:
-                self.prefill_plan = plan
-                self.decode_plan = None
-            else:
-                self.prefill_plan = None
-                self.decode_plan = plan
+        assert prefill_batch_size > 0 and decode_batch_size > 0
+        prefill_planner = VarlenAttentionPlanner(
+            self.query_lens[:prefill_batch_size].int().numpy(),
+            self.context_lens[:prefill_batch_size].int().numpy(),
+            tile_size_q=self.large_q_tile_size,
+            tile_size_kv=self.large_kv_tile_size,
+            block_size=self.block_size,
+        )
+        self.prefill_plan = pad_plan_for_loop_unroll(
+            prefill_planner.generate_plan(),
+            q_pad_value=self.num_active_tokens_after_padding * 10,
+        )
+        decode_planner = VarlenAttentionPlanner(
+            self.query_lens[prefill_batch_size:].int().numpy(),
+            self.context_lens[prefill_batch_size:].int().numpy(),
+            tile_size_q=1,
+            tile_size_kv=self.large_kv_tile_size,
+            block_size=self.block_size,
+        )
+        self.decode_plan = pad_plan_for_loop_unroll(decode_planner.generate_plan())
 
     def _prepare_buffer_unroll_info(self, plan: ContextAttnPlan, max_num_q_tiles: int):
         max_num_q_tiles = pad_to_next_power_of_2(max_num_q_tiles)
@@ -433,20 +389,6 @@ class NKIFlashPagedAttentionRunner:
 
     def _run_nki_xla(self, **input_kwargs):
         # execute using xla
-        compiler_flags = [
-            "-O1",
-            "--lnc=1",
-            "--retry_failed_compilation",
-        ]
-        if self.save_artifact:
-            compiler_flags.extend(
-                [
-                    "--internal-compiler-debug-mode=all",
-                    "--tensorizer-options='--print-stats --dump-after=All'",
-                ]
-            )
-        compiler_flags_str = " ".join(compiler_flags)
-        os.environ["NEURON_CC_FLAGS"] = compiler_flags_str
 
         import torch_xla.core.xla_model as xm
 
@@ -459,33 +401,12 @@ class NKIFlashPagedAttentionRunner:
 
         # - o: shape (bs, n_heads, seq_q, d) -> (bs, seq_q, n_heads, d)
         output_nki = output_nki.cpu()
-        if self.save_artifact:
-            artifact_dir = "./_artifacts"
-            os.makedirs(artifact_dir, exist_ok=True)
-            save_kernel_tensors_as_npy(
-                artifact_dir, is_torch_tensor=True, golden=output_nki, **input_kwargs
-            )
-
         output_nki = output_nki.permute(0, 2, 1, 3)
         output_nki = output_nki[0, : self.num_actual_tokens, :, :]
         return output_nki
 
     def _run_nki_numpy(self, **input_kwargs):
-        if self.save_artifact:
-            artifact_dir = "./_artifacts"
-            os.makedirs(artifact_dir, exist_ok=True)
-            output_nki = self.kernel_func(
-                save_artifact_dir=artifact_dir,
-                **input_kwargs,
-            )
-            save_kernel_tensors_as_npy(
-                artifact_dir,
-                is_torch_tensor=False,
-                golden=output_nki,
-                **input_kwargs,
-            )
-        else:
-            output_nki = self.kernel_func(**input_kwargs)
+        output_nki = self.kernel_func(**input_kwargs)
 
         # - o: shape (bs, n_heads, seq_q, d) -> (bs, seq_q, n_heads, d)
         output_nki = output_nki.transpose(0, 2, 1, 3)
@@ -512,6 +433,13 @@ class NKIFlashPagedAttentionRunner:
             num_kv_heads,
             mixed_precision,
         )
+        compiler_flags = [
+            "-O1",
+            "--lnc=1",
+            "--retry_failed_compilation",
+        ]
+        compiler_flags_str = " ".join(compiler_flags)
+        os.environ["NEURON_CC_FLAGS"] = compiler_flags_str
         if self.exec_mode == "xla":
             return self._run_nki_xla(**input_kwargs)
         else:

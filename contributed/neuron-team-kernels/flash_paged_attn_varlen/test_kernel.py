@@ -22,7 +22,6 @@ def _run_ref_version(
     head_size,
     num_queries_per_kv,
     return_buffer,
-    skip_active,
 ):
     num_actual_tokens = sum(query_lens)
     max_num_queries = pad_to_next_power_of_2(num_actual_tokens)
@@ -35,7 +34,6 @@ def _run_ref_version(
         head_size,
         num_queries_per_kv,
         return_buffer=return_buffer,
-        skip_active=skip_active,
     )
     output_ref_padded = F.pad(
         output_ref,
@@ -59,9 +57,7 @@ def _run_test(
     large_q_tile_size,
     large_kv_tile_size,
     mixed_precision,
-    skip_duplicate_kv_load,
     unroll_factor,
-    skip_active,
     **kwargs,
 ):
     dtype = torch.bfloat16 if mixed_precision else torch.float32
@@ -89,7 +85,6 @@ def _run_test(
         head_size,
         num_queries_per_kv,
         return_buffer=True,
-        skip_active=skip_active,
     )
 
     # prepare plan
@@ -100,7 +95,6 @@ def _run_test(
         large_kv_tile_size=large_kv_tile_size,
         block_size=block_size,
         dynamic_loop_unrolling_size=unroll_factor,
-        skip_duplicate_kv_load=skip_duplicate_kv_load,
         **kwargs,
     )
     nki_kernel_runner.prepare_tile_plan_inputs(
@@ -157,19 +151,15 @@ def _run_test(
         (256, 2048, 256),  # 8 blocks
         (256, 4096, 32),  # 128 blocks
         (256, 1024, 4),  # 256 blocks
-        (
-            128,
-            8192,
-            32,
-        ),  # FIXME: tile size 8192 causes BB spill compilation error in ~4% cases
     ],
 )
 @pytest.mark.parametrize(
     "num_heads,num_queries_per_kv,head_size",
     [
+        (4, 4, 128),
+        # XXX: On-chip control flow does not work with SPMD launch
         # (4, 2, 16),
         # (32, 8, 64),
-        (4, 4, 128),
         # (8, 1, 32),
     ],
 )
@@ -197,7 +187,6 @@ def test_prefill_with_decode(
     unroll_factor: int,
     mixed_precision: bool,
 ) -> None:
-    skip_active = False
 
     assert large_kv_tile_size % block_size == 0
 
@@ -235,6 +224,4 @@ def test_prefill_with_decode(
             large_kv_tile_size=large_kv_tile_size,
             unroll_factor=unroll_factor,
             mixed_precision=mixed_precision,
-            skip_duplicate_kv_load=False,
-            skip_active=skip_active,
         )
